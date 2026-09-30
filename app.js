@@ -464,8 +464,10 @@ function gen1Time(diff = 1) {
 }
 
 function makeFractionOptions(correct, pool = ['whole', 'half', 'quarter', 'three-quarters']) {
-  const options = new Set([correct]);
-  while (options.size < 4) options.add(pool[randInt(0, pool.length - 1)]);
+  // Use the provided pool (plus the correct answer). Never force 4 options when the
+  // pool has fewer unique values — that previously caused an infinite loop for
+  // Naming Fractions (pool of only half/quarter).
+  const options = new Set([correct, ...pool]);
   return shuffle([...options]);
 }
 
@@ -500,14 +502,15 @@ function genFractionName(diff = 1) {
 }
 
 function genFractionEqualShares(diff = 1) {
-  const correct = Math.random() > 0.5;
+  const equal = Math.random() > 0.5;
+  const parts = diff >= 2 ? 4 : 2;
   return {
     type: 'fractions', grade: 'first', topic: 'fractions', difficulty: diff,
-    prompt: correct ? 'Which shape is split into equal shares?' : 'Are these shares equal?',
-    speak: correct ? 'Which shape is split into equal shares?' : 'Are these shares equal?',
-    correctAnswer: correct ? 'yes' : 'no',
+    prompt: 'Are all the shares equal?',
+    speak: 'Are all the shares equal?',
+    correctAnswer: equal ? 'yes' : 'no',
     options: ['yes', 'no'],
-    visual: { mode: 'equal-shares', equal: correct, parts: diff >= 2 ? 4 : 2 }
+    visual: { mode: 'equal-shares', equal, parts }
   };
 }
 
@@ -565,6 +568,44 @@ function gen1Fractions(diff = 1) {
   if (diff >= 2) generators.push(genFractionEqualShares, genFractionCompare, genFractionNumberLine);
   if (diff >= 3) generators.push(genFractionStory);
   return generators[randInt(0, generators.length - 1)](diff);
+}
+
+// Build a reliable fraction round.  We deliberately rotate through the different
+// representations so a short 5-question round does not get stuck on one visual
+// type or depend on a single random generator call.
+function generateFractionPractice(count = 5, difficulty = 1, targetSkill = null) {
+  const direct = {
+    'first.fractions-identify': genFractionIdentify,
+    'first.fractions-name': genFractionName,
+    'first.fractions-equal': genFractionEqualShares,
+    'first.fractions-compare': genFractionCompare,
+    'first.fractions-numberline': genFractionNumberLine,
+    'first.fractions-stories': genFractionStory
+  };
+  const skillFn = targetSkill && direct[targetSkill];
+  const generators = skillFn ? [skillFn] : [
+    genFractionIdentify, genFractionName, genFractionEqualShares,
+    genFractionCompare, genFractionNumberLine, genFractionStory
+  ];
+  const questions = [];
+  for (let i = 0; i < count; i++) {
+    const fn = generators[i % generators.length];
+    try {
+      const q = fn(Math.max(1, difficulty));
+      if (!q || !q.options || !q.visual) throw new Error('Invalid fraction question');
+      if (!q.skillId) {
+        const mode = q.visual.mode;
+        q.skillId = `first.${mode === 'choice-grid' ? 'fractions-identify' : mode === 'single' ? 'fractions-name' : mode === 'equal-shares' ? 'fractions-equal' : mode === 'compare' ? 'fractions-compare' : mode === 'number-line' ? 'fractions-numberline' : 'fractions-stories'}`;
+      }
+      questions.push(q);
+    } catch (err) {
+      // Never leave the practice screen with an empty/invalid question.
+      const fallback = genFractionName(1);
+      fallback.skillId = 'first.fractions-name';
+      questions.push(fallback);
+    }
+  }
+  return questions;
 }
 
 function gen2Add(diff = 1) {
@@ -1033,8 +1074,11 @@ function ShapeDisplay({ shape }) {
 
 function FractionVisual({ type, mode = 'simple', label }) {
   const value = ({ whole: 1, half: 0.5, quarter: 0.25, 'three-quarters': 0.75 })[type] || 0.5;
-  const parts = type === 'quarter' || type === 'three-quarters' ? 4 : 2;
-  const shaded = Math.round(value * parts);
+  // Pie (simple) always uses 4 equal slices so half = 2/4, whole = 4/4, etc.
+  const pieShaded = Math.round(value * 4);
+  // Bars use natural parts (2 for halves, 4 for quarters)
+  const barParts = type === 'quarter' || type === 'three-quarters' ? 4 : 2;
+  const barShaded = Math.round(value * barParts);
   if (mode === 'number-line') {
     return (
       <div className="w-64 mx-auto py-4">
@@ -1047,12 +1091,12 @@ function FractionVisual({ type, mode = 'simple', label }) {
     );
   }
   if (mode === 'bars') {
-    return <div className="w-40 h-20 mx-auto border-4 border-gray-700 flex">{Array.from({ length: parts }, (_, i) => <div key={i} className={'flex-1 border-r-2 border-gray-700 ' + (i < shaded ? 'bg-blue-400' : 'bg-white')} />)}</div>;
+    return <div className="w-40 h-20 mx-auto border-4 border-gray-700 flex">{Array.from({ length: barParts }, (_, i) => <div key={i} className={'flex-1 border-r-2 border-gray-700 ' + (i < barShaded ? 'bg-blue-400' : 'bg-white')} />)}</div>;
   }
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="w-28 h-28 rounded-full border-4 border-gray-700 overflow-hidden grid grid-cols-2 grid-rows-2">
-        {Array.from({ length: 4 }, (_, i) => <div key={i} className={'border border-gray-500 ' + (i < shaded ? 'bg-orange-400' : 'bg-white')} />)}
+        {Array.from({ length: 4 }, (_, i) => <div key={i} className={'border border-gray-500 ' + (i < pieShaded ? 'bg-orange-400' : 'bg-white')} />)}
       </div>
       {label && <span className="font-bold">{label}</span>}
     </div>
@@ -1113,6 +1157,11 @@ function ActivityScreen({ question, onAnswer, onBack, audioEnabled }) {
   const [showHint, setShowHint] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [showConfetti, setShowConfetti] = useState(false);
+  const transitionTimer = useRef(null);
+
+  useEffect(() => () => {
+    if (transitionTimer.current) clearTimeout(transitionTimer.current);
+  }, []);
 
   // Reset all answer-specific UI whenever the question changes.
   // Without this, showResult stays true from the previous question,
@@ -1125,6 +1174,7 @@ function ActivityScreen({ question, onAnswer, onBack, audioEnabled }) {
     setShowHint(false);
     setFeedback('');
     setShowConfetti(false);
+    if (transitionTimer.current) { clearTimeout(transitionTimer.current); transitionTimer.current = null; }
   }, [question]);
 
   const handleSelect = (val) => {
@@ -1142,13 +1192,13 @@ function ActivityScreen({ question, onAnswer, onBack, audioEnabled }) {
       setFeedback(['Great job! 🌟', 'Awesome! 🎉', 'You got it! ⭐', 'Super! 🚀'][randInt(0, 3)]);
       setShowConfetti(true);
       speak(audioEnabled ? 'Great job!' : '', audioEnabled);
-      setTimeout(() => onAnswer(true, attempts + 1), 1400);
+      transitionTimer.current = setTimeout(() => { transitionTimer.current = null; onAnswer(true, attempts + 1); }, 1000);
     } else {
       const msgs = attempts === 0 ? ['Almost! Try again 😊', "Not quite. Let's try again!", 'Close! Give it another try!'] : ["Let's try it together!", 'Here is a hint to help!'];
       setFeedback(msgs[Math.min(attempts, msgs.length - 1)]);
       if (attempts >= 1) setShowHint(true);
       speak(audioEnabled ? 'Almost, try again!' : '', audioEnabled);
-      setTimeout(() => { setShowResult(false); setSelected(null); }, 1600);
+      transitionTimer.current = setTimeout(() => { transitionTimer.current = null; setShowResult(false); setSelected(null); }, 1200);
     }
   };
 
@@ -1235,14 +1285,67 @@ function ActivityScreen({ question, onAnswer, onBack, audioEnabled }) {
         );
       }
       if (v.mode === 'equal-shares') {
-        return <div className="flex justify-center gap-6 mt-4"><FractionVisual type={v.equal ? 'half' : 'quarter'} mode="bars" /><FractionVisual type={v.equal ? 'quarter' : 'half'} mode="bars" /></div>;
+        return (
+          <div className="flex flex-col items-center gap-5 mt-4">
+            <div className="flex justify-center gap-6">
+              {/* When equal: both halves. When unequal: half vs quarter so shares look different. */}
+              <FractionVisual type="half" mode="bars" />
+              <FractionVisual type={v.equal ? 'half' : 'quarter'} mode="bars" />
+            </div>
+            <div className="flex gap-4">
+              {question.options.map((opt) => (
+                <button key={opt} type="button" onClick={() => handleSelect(opt)} className={'btn-big px-8 shadow-lg border-4 ' + (selected === opt ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white')}>
+                  {opt === 'yes' ? '✅ Yes' : '❌ No'}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
       }
       if (v.mode === 'number-line') {
-        return <FractionVisual type={v.target} mode="number-line" />;
+        return (
+          <div className="flex flex-col items-center gap-5 mt-4">
+            <FractionVisual type={v.target} mode="number-line" />
+            <div className="flex flex-wrap justify-center gap-4">
+              {question.options.map((f) => (
+                <button key={f} type="button" onClick={() => handleSelect(f)} className={'btn-big px-5 shadow-lg border-4 ' + (selected === f ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white')}>
+                  {fractionLabel(f)}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
       }
       if (v.mode === 'story') {
-        return <div className="text-7xl text-center my-5" aria-hidden="true">{v.emoji}</div>;
+        return (
+          <div className="flex flex-col items-center gap-5 mt-4">
+            <div className="text-7xl text-center my-2" aria-hidden="true">{v.emoji}</div>
+            <div className="flex flex-wrap justify-center gap-4">
+              {question.options.map((f) => (
+                <button key={f} type="button" onClick={() => handleSelect(f)} className={'btn-big px-5 shadow-lg border-4 ' + (selected === f ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white')}>
+                  {fractionLabel(f)}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
       }
+      if (v.mode === 'single') {
+        // Naming Fractions: show the target picture, then text options
+        return (
+          <div className="flex flex-col items-center gap-5 mt-4">
+            <FractionVisual type={v.target} />
+            <div className="flex flex-wrap justify-center gap-4">
+              {question.options.map((f) => (
+                <button key={f} type="button" onClick={() => handleSelect(f)} className={'btn-big px-5 shadow-lg border-4 ' + (selected === f ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white')}>
+                  {fractionLabel(f)}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      }
+      // choice-grid (identify): pick which picture matches the target fraction
       return (
         <div className="flex flex-wrap justify-center gap-5 mt-4">
           {question.options.map((f) => (
@@ -1436,12 +1539,30 @@ function PracticeSession({ grade, topic, targetSkill, dailyQuestions, sessionLen
   const [showStar, setShowStar] = useState(false);
   const totalQuestions = dailyQuestions ? dailyQuestions.length : sessionLength;
 
+  // Only re-generate when the session parameters change — NOT when progress updates
+  // after every answer (that would reset the whole round and feel "stuck").
   useEffect(() => {
     const startingDifficulty = getAdaptiveDifficulty(progress, grade, topic);
     setIdx(0); setCorrectCount(0); setDifficulty(startingDifficulty); setStreak(0); setBestStreak(0); setShowStar(false);
-    if (dailyQuestions) setQuestions(dailyQuestions);
-    else setQuestions(Array.from({ length: totalQuestions }, () => generateQuestion(grade, topic, startingDifficulty, targetSkill)));
-  }, [grade, topic, dailyQuestions, sessionLength]);
+    if (dailyQuestions) {
+      setQuestions(dailyQuestions);
+    } else if (grade === 'first' && topic === 'fractions') {
+      setQuestions(generateFractionPractice(totalQuestions, startingDifficulty, targetSkill));
+    } else {
+      const generated = [];
+      for (let i = 0; i < totalQuestions; i++) {
+        try {
+          const q = generateQuestion(grade, topic, startingDifficulty, targetSkill);
+          if (!q) throw new Error('Question generation returned nothing');
+          generated.push(q);
+        } catch (err) {
+          generated.push(generateQuestion('kindergarten', 'numbers', 1));
+        }
+      }
+      setQuestions(generated);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- progress is intentionally omitted so answering does not restart the session
+  }, [grade, topic, targetSkill, dailyQuestions, sessionLength]);
 
   const current = questions[idx];
 
