@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Math Fun! ⭐ Kids Math Practice</title>
+  <meta name="theme-color" content="#60a5fa" />
+  <meta name="description" content="Free, kid-friendly math practice for Kindergarten through 2nd grade." />
+  <link rel="manifest" href="manifest.webmanifest" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -148,6 +151,20 @@
       transform: translate(-50%, -50%);
       z-index: 10;
     }
+    .practice-card {
+      width: min(960px, 100%);
+      margin: 0 auto;
+      background: rgba(255,255,255,.94);
+      border-radius: 2rem;
+      padding: 1.25rem;
+      box-shadow: 0 20px 50px rgba(15,23,42,.12);
+    }
+    .question-number {
+      font-size: 1.15rem;
+      font-weight: 800;
+      color: #475569;
+      text-align: center;
+    }
     .hint-box {
       background: #fef9c3;
       border: 3px solid #facc15;
@@ -187,5 +204,8 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <script type="text/babel" src="app.js"></script>
+<script>
+    if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {})); }
+  </script>
 </body>
 </html>
